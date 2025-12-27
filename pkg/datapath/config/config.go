@@ -6,12 +6,13 @@ package config
 import (
 	"github.com/cilium/cilium/pkg/datapath/linux/probes"
 	datapath "github.com/cilium/cilium/pkg/datapath/types"
+	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/option"
 )
 
 func NodeConfig(lnc *datapath.LocalNodeConfiguration) Node {
 	node := *NewNode()
-	node.ClusterIDMax = option.Config.MaxConnectedClusters
+	node.ClusterIDBits = identity.GetClusterIDBits()
 
 	node.CiliumHostIfIndex = lnc.CiliumHostIfIndex
 	node.CiliumHostMAC = lnc.CiliumHostMAC.As8()
