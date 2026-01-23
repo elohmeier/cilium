@@ -144,6 +144,10 @@ func (r *gatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.Secret{},
 			r.enqueueRequestForTLSSecret(),
 			builder.WithPredicates(predicate.NewPredicateFuncs(r.usedInGateway))).
+		// Watch related ConfigMaps used for Frontend TLS validation (mTLS)
+		Watches(&corev1.ConfigMap{},
+			r.enqueueRequestForFrontendTLSConfigMap(),
+			builder.WithPredicates(predicate.NewPredicateFuncs(r.usedInGatewayFrontendTLS))).
 		// Watch related namespace in allowed namespaces
 		Watches(&corev1.Namespace{},
 			r.enqueueRequestForAllowedNamespace()).
@@ -487,6 +491,64 @@ func (r *gatewayReconciler) enqueueRequestForAllowedNamespace() handler.EventHan
 
 func (r *gatewayReconciler) usedInGateway(obj client.Object) bool {
 	return len(getGatewaysForSecret(context.Background(), r.Client, obj, r.logger)) > 0
+}
+
+// usedInGatewayFrontendTLS checks if the ConfigMap is used in a Gateway's FrontendValidation
+func (r *gatewayReconciler) usedInGatewayFrontendTLS(obj client.Object) bool {
+	return len(getGatewaysForFrontendTLSConfigMap(context.Background(), r.Client, obj, r.logger)) > 0
+}
+
+// enqueueRequestForFrontendTLSConfigMap returns an event handler for changes to ConfigMaps
+// used in FrontendValidation
+func (r *gatewayReconciler) enqueueRequestForFrontendTLSConfigMap() handler.EventHandler {
+	return handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, a client.Object) []reconcile.Request {
+		gateways := getGatewaysForFrontendTLSConfigMap(ctx, r.Client, a, r.logger)
+		reqs := make([]reconcile.Request, 0, len(gateways))
+		for _, gw := range gateways {
+			reqs = append(reqs, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Namespace: gw.GetNamespace(),
+					Name:      gw.GetName(),
+				},
+			})
+		}
+		return reqs
+	})
+}
+
+// getGatewaysForFrontendTLSConfigMap returns Gateways that reference the given ConfigMap
+// in their FrontendValidation configuration
+func getGatewaysForFrontendTLSConfigMap(ctx context.Context, c client.Client, obj client.Object, logger *slog.Logger) []*gatewayv1.Gateway {
+	scopedLog := logger.With(
+		logfields.Resource, obj.GetName(),
+	)
+
+	gwList := &gatewayv1.GatewayList{}
+	if err := c.List(ctx, gwList); err != nil {
+		scopedLog.Warn("Unable to list Gateways", logfields.Error, err)
+		return nil
+	}
+
+	var gateways []*gatewayv1.Gateway
+	for _, gw := range gwList.Items {
+		for _, l := range gw.Spec.Listeners {
+			if l.TLS == nil || l.TLS.FrontendValidation == nil {
+				continue
+			}
+
+			for _, ref := range l.TLS.FrontendValidation.CACertificateRefs {
+				// Only handle ConfigMap references
+				if ref.Group != "" || ref.Kind != "ConfigMap" {
+					continue
+				}
+				ns := helpers.NamespaceDerefOr(ref.Namespace, gw.GetNamespace())
+				if string(ref.Name) == obj.GetName() && ns == obj.GetNamespace() {
+					gateways = append(gateways, &gw)
+				}
+			}
+		}
+	}
+	return gateways
 }
 
 func (r *gatewayReconciler) enqueueRequestForReferenceGrant() handler.EventHandler {

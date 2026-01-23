@@ -28,6 +28,11 @@ func IsSecretReferenceAllowed(originatingNamespace string, sr gatewayv1.SecretOb
 	return isReferenceAllowed(originatingNamespace, string(sr.Name), sr.Namespace, gvk, corev1.SchemeGroupVersion.WithKind("Secret"), grants)
 }
 
+// IsObjectReferenceAllowed returns true if the object reference is allowed by the reference grant.
+func IsObjectReferenceAllowed(originatingNamespace string, ref gatewayv1.ObjectReference, fromGVK, toGVK schema.GroupVersionKind, grants []gatewayv1beta1.ReferenceGrant) bool {
+	return isReferenceAllowed(originatingNamespace, string(ref.Name), ref.Namespace, fromGVK, toGVK, grants)
+}
+
 func isReferenceAllowed(originatingNamespace, name string, namespace *gatewayv1.Namespace, fromGVK, toGVK schema.GroupVersionKind, grants []gatewayv1beta1.ReferenceGrant) bool {
 	ns := NamespaceDerefOr(namespace, originatingNamespace)
 	if originatingNamespace == ns {

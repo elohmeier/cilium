@@ -100,12 +100,13 @@ func GatewayAPI(input Input) ([]model.HTTPListener, []model.TLSPassthroughListen
 					UID:       string(input.Gateway.GetUID()),
 				},
 			},
-			Port:           uint32(l.Port),
-			Hostname:       toHostname(l.Hostname),
-			TLS:            toTLS(l.TLS, input.ReferenceGrants, input.Gateway.GetNamespace()),
-			Routes:         httpRoutes,
-			Infrastructure: infra,
-			Service:        toServiceModel(input.GatewayClassConfig),
+			Port:                  uint32(l.Port),
+			Hostname:              toHostname(l.Hostname),
+			TLS:                   toTLS(l.TLS, input.ReferenceGrants, input.Gateway.GetNamespace()),
+			FrontendTLSValidation: toFrontendTLSValidation(l.TLS, input.ReferenceGrants, input.Gateway.GetNamespace()),
+			Routes:                httpRoutes,
+			Infrastructure:        infra,
+			Service:               toServiceModel(input.GatewayClassConfig),
 		})
 
 		resTLSPassthrough = append(resTLSPassthrough, model.TLSPassthroughListener{
@@ -903,6 +904,47 @@ func toTLS(tls *gatewayv1.GatewayTLSConfig, grants []gatewayv1beta1.ReferenceGra
 		})
 	}
 	return res
+}
+
+func toFrontendTLSValidation(tls *gatewayv1.GatewayTLSConfig, grants []gatewayv1beta1.ReferenceGrant, defaultNamespace string) *model.FrontendTLSValidation {
+	if tls == nil || tls.FrontendValidation == nil || len(tls.FrontendValidation.CACertificateRefs) == 0 {
+		return nil
+	}
+
+	var caCertRefs []model.FullyQualifiedResource
+	for _, ref := range tls.FrontendValidation.CACertificateRefs {
+		// Only support ConfigMap references for CA certificates
+		if ref.Group != "" || ref.Kind != "ConfigMap" {
+			continue
+		}
+
+		refNs := helpers.NamespaceDerefOr(ref.Namespace, defaultNamespace)
+		// Check ReferenceGrant for cross-namespace references
+		if refNs != defaultNamespace && !helpers.IsObjectReferenceAllowed(
+			defaultNamespace,
+			ref,
+			gatewayv1.SchemeGroupVersion.WithKind("Gateway"),
+			corev1.SchemeGroupVersion.WithKind("ConfigMap"),
+			grants,
+		) {
+			continue
+		}
+
+		caCertRefs = append(caCertRefs, model.FullyQualifiedResource{
+			Group:     string(ref.Group),
+			Kind:      string(ref.Kind),
+			Name:      string(ref.Name),
+			Namespace: refNs,
+		})
+	}
+
+	if len(caCertRefs) == 0 {
+		return nil
+	}
+
+	return &model.FrontendTLSValidation{
+		CACertRefs: caCertRefs,
+	}
 }
 
 func toHTTPHeaders(headers []gatewayv1.HTTPHeader) []model.Header {
